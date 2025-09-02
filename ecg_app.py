@@ -294,7 +294,7 @@ def main():
         # Instructions when no file is uploaded
         st.info("^ Please upload an ECG image to begin digitization")
         
-        with st.expander("ℹ️ How to use this tool"):
+        with st.expander("ℹ️ How to use this app"):
             st.markdown("""
             1. **Upload an ECG Image**: Upload a clear ECG image with 3 visible leads
             2. **Adjust Parameters**: Use the sidebar to fine-tune processing parameters if needed
