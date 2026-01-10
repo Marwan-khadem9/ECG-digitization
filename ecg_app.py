@@ -6,6 +6,7 @@ from PIL import Image
 from scipy.ndimage import median_filter
 from skimage.morphology import thin
 from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
 import io
 import base64
 
@@ -15,7 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
-def process_ecg_image(uploaded_image):
+def process_ecg_image(uploaded_image, use_dilation, use_thinning):
     """Process the uploaded ECG image and extract lead data"""
     
     # Step 1: Convert PIL image to grayscale
@@ -32,18 +33,20 @@ def process_ecg_image(uploaded_image):
     # Invert image for morphological operations
     inverted = cv2.bitwise_not(denoised)
     
-    # Mild dilation to bridge gaps
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    dilated = cv2.dilate(inverted, kernel, iterations=1)
+    # Conditional dilation
+    if use_dilation:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        dilated = cv2.dilate(inverted, kernel, iterations=1)
+    else:
+        dilated = inverted
     
-    # Prepare binary mask for thinning
-    binary_mask = (dilated // 255).astype(np.uint8)
-    
-    # Apply thinning
-    thinned = thin(binary_mask).astype(np.uint8) * 255
-    
-    # Invert back to black-on-white
-    processed_image = cv2.bitwise_not(thinned)
+    # Conditional thinning
+    if use_thinning:
+        binary_mask = (dilated // 255).astype(np.uint8)
+        thinned = thin(binary_mask).astype(np.uint8) * 255
+        processed_image = cv2.bitwise_not(thinned)
+    else:
+        processed_image = cv2.bitwise_not(dilated)
     
     return image_np, binary_image, processed_image
 
@@ -74,32 +77,61 @@ def detect_baselines(processed_image):
 def digitize_leads(segments, baselines, processed_image):
     """Digitize the ECG leads from the processed image"""
     
-    height, width = processed_image.shape
+    height, width = processed_image.shape   
     digitized_leads = []
-    
+
     for i, segment in enumerate(segments):
-        baseline_local = baselines[i] - i * (height // 3)
+        baseline_local = baselines[i] - i * (height // 3)  # baseline for this segment
         x_vals = []
         y_vals = []
-        
+
         for col in range(width):
-            col_data = segment[:, col]
+            col_data = segment[:, col].astype(float)
             black_rows = np.where(col_data > 0)[0]
-            
+
             if len(black_rows) > 0:
-                furthest_row = black_rows[np.argmax(np.abs(black_rows - baseline_local))]
-                voltage = baseline_local - furthest_row
+                # Use Median instead of furthest
+                r = int(np.median(black_rows))
+
+                # --- Vertical sub-pixel refinement using 3-point parabola ---
+                if 1 <= r < height - 1:
+                    y_minus = col_data[r-1]
+                    y0 = col_data[r]
+                    y_plus = col_data[r+1]
+
+                    denom = (y_minus - 2*y0 + y_plus)
+                    delta = 0.5 * (y_minus - y_plus) / denom if abs(denom) > 1e-6 else 0
+
+                    subpixel_row = r + delta
+                else:
+                    subpixel_row = r
+
+                voltage = baseline_local - subpixel_row
                 x_vals.append(col)
                 y_vals.append(voltage)
             else:
+                # No signal detected in this column
                 x_vals.append(col)
                 y_vals.append(np.nan)
-        
-        digitized_leads.append((x_vals, y_vals))
-    
+
+        # --- Remove NaNs and interpolate horizontally to get smoother sub-pixel curve ---
+        x_vals = np.array(x_vals)
+        y_vals = np.array(y_vals)
+        mask = ~np.isnan(y_vals)
+        x_vals_clean = x_vals[mask]
+        y_vals_clean = y_vals[mask]
+
+        # Horizontal cubic interpolation: upsample 3x
+        f_interp = interp1d(x_vals_clean, y_vals_clean, kind='cubic')
+        x_fine = np.linspace(x_vals_clean[0], x_vals_clean[-1], len(x_vals_clean)*3)
+        y_fine = f_interp(x_fine)
+
+        # Save digitized lead
+        digitized_leads.append((x_fine, y_fine))
+
     return digitized_leads
 
-def smooth_leads(digitized_leads):
+def smooth_leads(digitized_leads, use_smoothing):
     """Apply Savitzky-Golay filter to smooth the leads"""
     
     smoothed_leads = []
@@ -113,12 +145,15 @@ def smooth_leads(digitized_leads):
             if np.sum(not_nan) > 1:  # Need at least 2 points for interpolation
                 y_array = np.interp(np.arange(len(y_array)), np.flatnonzero(not_nan), y_array[not_nan])
         
-        # Apply Savitzky-Golay filter
-        if len(y_array) > 9:
-            window_length = min(9, len(y_array) if len(y_array) % 2 == 1 else len(y_array) - 1)
-            smoothed_y = savgol_filter(y_array, window_length=window_length, polyorder=3)
+        # Conditional Savitzky-Golay filter
+        if use_smoothing:
+            if len(y_array) > 9:
+                window_length = min(9, len(y_array) if len(y_array) % 2 == 1 else len(y_array) - 1)
+                smoothed_y = savgol_filter(y_array, window_length=window_length, polyorder=3)
+            else:
+                smoothed_y = y_array  # Skip filtering for very short signals
         else:
-            smoothed_y = y_array  # Skip filtering for very short signals
+            smoothed_y = y_array  # No smoothing applied
         
         smoothed_leads.append((x_vals, smoothed_y.tolist()))
     
@@ -133,6 +168,7 @@ def create_plots(smoothed_leads):
         y_clean = np.array(y)[~np.isnan(y)]
         if len(y_clean) > 0:
             all_y.extend(y_clean)
+    all_y = np.array(all_y)/80 # Convert from pixels to mV
     
     if len(all_y) > 0:
         ymin, ymax = np.min(all_y), np.max(all_y)
@@ -144,13 +180,14 @@ def create_plots(smoothed_leads):
     lead_names = ['Lead I', 'Lead II', 'Lead III']
     
     for i, (x, y) in enumerate(smoothed_leads):
-        axes[i].plot(x, y, color='blue', linewidth=1.5)
+        y = np.array(y)
+        axes[i].plot(x/200, y/80, color='blue', linewidth=1.5)
         axes[i].set_title(lead_names[i], fontsize=14, fontweight='bold')
-        axes[i].set_ylabel("Amplitude (pixels)", fontsize=12)
+        axes[i].set_ylabel("Amplitude (mV)", fontsize=12)
         axes[i].set_ylim([ymin, ymax])
         axes[i].grid(True, alpha=0.3)
     
-    axes[-1].set_xlabel("Horizontal Position (pixels)", fontsize=12)
+    axes[-1].set_xlabel("Time (seconds)", fontsize=12)
     plt.tight_layout()
     
     return fig
@@ -190,6 +227,11 @@ def main():
     st.sidebar.header("Processing Parameters")
     threshold_value = st.sidebar.slider("Binary Threshold", 1, 255, 50, help="Adjust this if the ECG signal is not properly detected")
     
+    st.sidebar.header("Processing Options")
+    use_dilation = st.sidebar.checkbox("Include Dilation", value=True, help="Apply dilation to bridge gaps in the ECG signal")
+    use_thinning = st.sidebar.checkbox("Include Thinning", value=True, help="Apply morphological thinning to refine signal lines")
+    use_smoothing = st.sidebar.checkbox("Include Savitzky-Golay Filter", value=True, help="Apply post-processing smoothing filter to the digitized signal")
+    
     # File uploader
     uploaded_file = st.file_uploader(
         "Choose an ECG image file", 
@@ -210,8 +252,8 @@ def main():
         # Process the image
         with st.spinner("Processing ECG image..."):
             try:
-                # Process image
-                original_gray, binary_img, processed_img = process_ecg_image(image)
+                # Process image with user settings
+                original_gray, binary_img, processed_img = process_ecg_image(image, use_dilation, use_thinning)
                 
                 # Detect baselines
                 segments, baselines = detect_baselines(processed_img)
@@ -219,8 +261,8 @@ def main():
                 # Digitize leads
                 digitized_leads = digitize_leads(segments, baselines, processed_img)
                 
-                # Apply smoothing
-                smoothed_leads = smooth_leads(digitized_leads)
+                # Apply smoothing with user settings
+                smoothed_leads = smooth_leads(digitized_leads, use_smoothing)
                 
                 with col2:
                     st.subheader("Processed Image")
@@ -239,7 +281,8 @@ def main():
                 st.pyplot(fig_baseline)
                 
                 # Create and display plots
-                st.subheader("Digitized ECG Leads (Savitzky-Golay Filtered)")
+                filter_status = "with" if use_smoothing else "without"
+                st.subheader(f"Digitized ECG Leads ({filter_status} Savitzky-Golay Filter)")
                 fig_leads = create_plots(smoothed_leads)
                 st.pyplot(fig_leads)
                 
@@ -286,6 +329,13 @@ def main():
                         duration = len(smoothed_leads[0][0])
                         st.metric("Signal Duration (pixels)", duration)
                 
+                # Show active processing options
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("Active Settings")
+                st.sidebar.write(f"✓ Dilation: {'Enabled' if use_dilation else 'Disabled'}")
+                st.sidebar.write(f"✓ Thinning: {'Enabled' if use_thinning else 'Disabled'}")
+                st.sidebar.write(f"✓ Smoothing: {'Enabled' if use_smoothing else 'Disabled'}")
+                
             except Exception as e:
                 st.error(f"Error processing image: {str(e)}")
                 st.info("Please try adjusting the threshold value or uploading a different image.")
@@ -298,16 +348,18 @@ def main():
             st.markdown("""
             1. **Upload an ECG Image**: Upload a clear ECG image with 3 visible leads
             2. **Adjust Parameters**: Use the sidebar to fine-tune processing parameters if needed
-            3. **View Results**: The app will automatically process the image and show:
+            3. **Toggle Processing Options**: Enable or disable dilation, thinning, and smoothing filters
+            4. **View Results**: The app will automatically process the image and show:
                - Detected baselines for each lead
                - Digitized and smoothed ECG waveforms
                - Processing summary
-            4. **Download Data**: Get your digitized ECG data as a .dat file
+            5. **Download Data**: Get your digitized ECG data as a .dat file
             
             **Tips for best results:**
             - Use high-resolution, clear ECG images
             - Ensure the ECG traces are clearly visible against the background
             - The image should contain exactly 3 ECG leads arranged vertically
+            - Experiment with processing options to optimize results for your specific ECG image
             """)
 
 if __name__ == "__main__":
