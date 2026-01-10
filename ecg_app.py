@@ -7,8 +7,10 @@ from scipy.ndimage import median_filter
 from skimage.morphology import thin
 from scipy.signal import savgol_filter
 from scipy.interpolate import interp1d
+from scipy.ndimage import distance_transform_edt
 import io
 import base64
+import pandas as pd
 
 # Set page config
 st.set_page_config(
@@ -218,6 +220,164 @@ def get_download_link(file_content, filename):
     b64 = base64.b64encode(file_content.encode()).decode()
     return f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download {filename}</a>'
 
+# --- QUALITY METRICS FUNCTIONS ---
+
+def get_waveform_mask_for_metrics(signal, h, w, band_height, center, shift):
+    """Generate waveform mask for metric computation"""
+    mask = np.zeros((h, w), dtype=np.uint8)
+    signal_flipped = band_height - signal
+    signal_centered = signal_flipped - np.mean(signal_flipped)
+    signal_y = signal_centered + center + shift
+    signal_resampled = np.interp(np.linspace(0, len(signal_y)-1, w),
+                                 np.arange(len(signal_y)), signal_y).astype(int)
+    for x in range(1, w):
+        y1, y2 = signal_resampled[x-1], signal_resampled[x]
+        if 0 <= y1 < h and 0 <= y2 < h:
+            cv2.line(mask, (x-1, y1), (x, y2), 255, 1)
+    return mask
+
+def chamfer_distance(mask1, mask2):
+    """Compute Chamfer distance between two masks"""
+    dist_map = distance_transform_edt(1 - mask2)
+    points1 = np.where(mask1 > 0)
+    return np.mean(dist_map[points1]) if len(points1[0]) > 0 else np.nan
+
+def trimmed_hausdorff(A, B, percentile=99):
+    """Compute trimmed Hausdorff distance"""
+    if len(A) == 0 or len(B) == 0:
+        return np.nan
+    dists = np.array([np.min(np.linalg.norm(B - a, axis=1)) for a in A])
+    return np.percentile(dists, percentile)
+
+def modified_hausdorff(A, B):
+    """Compute modified Hausdorff distance"""
+    if len(A) == 0 or len(B) == 0:
+        return np.nan
+    d_ab = np.mean([np.min(np.linalg.norm(B - a, axis=1)) for a in A])
+    d_ba = np.mean([np.min(np.linalg.norm(A - b, axis=1)) for b in B])
+    return max(d_ab, d_ba)
+
+def hausdorff_segmentwise(pred_mask, true_mask, y_start, y_end, num_segments=5, metric_type='trimmed'):
+    """Compute segment-wise Hausdorff distance"""
+    pred_band = pred_mask[y_start:y_end, :]
+    true_band = true_mask[y_start:y_end, :]
+    segment_width = pred_band.shape[1] // num_segments
+    segment_results = []
+
+    for i in range(num_segments):
+        x_start = i * segment_width
+        x_end = (i+1) * segment_width if i < num_segments-1 else pred_band.shape[1]
+        seg_pred = pred_band[:, x_start:x_end]
+        seg_true = true_band[:, x_start:x_end]
+
+        pred_pts = np.column_stack(np.where(seg_pred == 255))
+        true_pts = np.column_stack(np.where(seg_true == 1))
+
+        if len(pred_pts) > 0 and len(true_pts) > 0:
+            if metric_type == 'trimmed':
+                h1 = trimmed_hausdorff(pred_pts, true_pts, 99)
+                h2 = trimmed_hausdorff(true_pts, pred_pts, 99)
+                hd = max(h1, h2)
+            else:  # modified
+                hd = modified_hausdorff(pred_pts, true_pts)
+        else:
+            hd = np.nan
+        segment_results.append(hd)
+    return segment_results
+
+def compute_quality_metrics(image_np, dat_content, compute_chamfer, compute_trimmed, compute_modified):
+    """Compute selected quality metrics"""
+    if not (compute_chamfer or compute_trimmed or compute_modified):
+        return None
+    
+    # Preprocess original image
+    _, binary = cv2.threshold(image_np, 25, 255, cv2.THRESH_BINARY)
+    ecg_trace_mask = (binary == 0).astype(np.uint8)
+    h, w = ecg_trace_mask.shape
+    band_height = h // 3
+    
+    band_center = {
+        "Lead1": band_height // 2,
+        "Lead2": band_height + band_height // 2,
+        "Lead3": 2 * band_height + band_height // 2
+    }
+    
+    # Parse .dat file
+    lines = dat_content.strip().split('\n')[1:]  # Skip header
+    data = []
+    for line in lines:
+        values = line.strip().split()
+        if len(values) >= 4:
+            data.append([float(values[0]), float(values[1]), float(values[2]), float(values[3])])
+    data = np.array(data)
+    
+    lead_indices = {"Lead1": 1, "Lead2": 2, "Lead3": 3}
+    search_range = range(2, 13)
+    
+    results = {
+        "Lead1": {},
+        "Lead2": {},
+        "Lead3": {}
+    }
+    
+    for lead in ["Lead1", "Lead2", "Lead3"]:
+        signal = data[:, lead_indices[lead]]
+        center = band_center[lead]
+        y_start = center - band_height // 2
+        y_end = center + band_height // 2
+        
+        # Optimize for each metric
+        if compute_chamfer:
+            best_chamfer = float("inf")
+            best_shift_chamfer = 0
+            
+            for shift in search_range:
+                waveform_mask = get_waveform_mask_for_metrics(signal, h, w, band_height, center, shift)
+                wave_band = waveform_mask[y_start:y_end, :]
+                trace_band = ecg_trace_mask[y_start:y_end, :]
+                chamfer_val = chamfer_distance(wave_band, trace_band)
+                
+                if chamfer_val < best_chamfer:
+                    best_chamfer = chamfer_val
+                    best_shift_chamfer = shift
+            
+            results[lead]["chamfer"] = best_chamfer
+            results[lead]["chamfer_shift"] = best_shift_chamfer
+        
+        if compute_trimmed:
+            best_trimmed = float("inf")
+            best_shift_trimmed = 0
+            
+            for shift in search_range:
+                waveform_mask = get_waveform_mask_for_metrics(signal, h, w, band_height, center, shift)
+                segment_hd = hausdorff_segmentwise(waveform_mask, ecg_trace_mask, y_start, y_end, 5, 'trimmed')
+                max_hd = np.nanmax(segment_hd)
+                
+                if max_hd < best_trimmed:
+                    best_trimmed = max_hd
+                    best_shift_trimmed = shift
+            
+            results[lead]["trimmed_hausdorff"] = best_trimmed
+            results[lead]["trimmed_shift"] = best_shift_trimmed
+        
+        if compute_modified:
+            best_modified = float("inf")
+            best_shift_modified = 0
+            
+            for shift in search_range:
+                waveform_mask = get_waveform_mask_for_metrics(signal, h, w, band_height, center, shift)
+                segment_hd = hausdorff_segmentwise(waveform_mask, ecg_trace_mask, y_start, y_end, 5, 'modified')
+                max_hd = np.nanmax(segment_hd)
+                
+                if max_hd < best_modified:
+                    best_modified = max_hd
+                    best_shift_modified = shift
+            
+            results[lead]["modified_hausdorff"] = best_modified
+            results[lead]["modified_shift"] = best_shift_modified
+    
+    return results
+
 # Main Streamlit App
 def main():
     st.title("ECG Digitization Web App")
@@ -231,6 +391,12 @@ def main():
     use_dilation = st.sidebar.checkbox("Include Dilation", value=True, help="Apply dilation to bridge gaps in the ECG signal")
     use_thinning = st.sidebar.checkbox("Include Thinning", value=True, help="Apply morphological thinning to refine signal lines")
     use_smoothing = st.sidebar.checkbox("Include Savitzky-Golay Filter", value=True, help="Apply post-processing smoothing filter to the digitized signal")
+    
+    st.sidebar.header("Quality Metrics")
+    st.sidebar.markdown("Select metrics to evaluate digitization quality:")
+    compute_chamfer = st.sidebar.checkbox("Chamfer Distance", value=False, help="Compute Chamfer distance between digitized and original signal")
+    compute_trimmed_hausdorff = st.sidebar.checkbox("Trimmed Hausdorff Distance", value=False, help="Compute 99th percentile Hausdorff distance")
+    compute_modified_hausdorff = st.sidebar.checkbox("Modified Hausdorff Distance", value=False, help="Compute mean-based Hausdorff distance")
     
     # File uploader
     uploaded_file = st.file_uploader(
@@ -289,6 +455,18 @@ def main():
                 # Create download file
                 dat_content = create_dat_file(smoothed_leads)
                 
+                # Compute quality metrics if requested
+                quality_results = None
+                if compute_chamfer or compute_trimmed_hausdorff or compute_modified_hausdorff:
+                    with st.spinner("Computing quality metrics..."):
+                        quality_results = compute_quality_metrics(
+                            original_gray, 
+                            dat_content, 
+                            compute_chamfer, 
+                            compute_trimmed_hausdorff, 
+                            compute_modified_hausdorff
+                        )
+                
                 # Download button
                 st.subheader("Download Results")
                 
@@ -329,12 +507,50 @@ def main():
                         duration = len(smoothed_leads[0][0])
                         st.metric("Signal Duration (pixels)", duration)
                 
+                # Display quality metrics if computed
+                if quality_results is not None:
+                    st.subheader("Quality Metrics")
+                    
+                    # Create metrics table
+                    metrics_data = []
+                    for lead in ["Lead1", "Lead2", "Lead3"]:
+                        row = {"Lead": lead}
+                        
+                        if compute_chamfer:
+                            row["Chamfer Distance"] = f"{quality_results[lead].get('chamfer', np.nan):.2f}"
+                            row["Chamfer Opt. Shift"] = quality_results[lead].get('chamfer_shift', 'N/A')
+                        
+                        if compute_trimmed_hausdorff:
+                            row["Trimmed Hausdorff"] = f"{quality_results[lead].get('trimmed_hausdorff', np.nan):.2f}"
+                            row["Trimmed Opt. Shift"] = quality_results[lead].get('trimmed_shift', 'N/A')
+                        
+                        if compute_modified_hausdorff:
+                            row["Modified Hausdorff"] = f"{quality_results[lead].get('modified_hausdorff', np.nan):.2f}"
+                            row["Modified Opt. Shift"] = quality_results[lead].get('modified_shift', 'N/A')
+                        
+                        metrics_data.append(row)
+                    
+                    metrics_df = pd.DataFrame(metrics_data)
+                    st.dataframe(metrics_df, use_container_width=True)
+                    
+                    st.info("ℹ️ Lower metric values indicate better digitization quality. All distances are in pixels.")
+                
                 # Show active processing options
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Active Settings")
                 st.sidebar.write(f"✓ Dilation: {'Enabled' if use_dilation else 'Disabled'}")
                 st.sidebar.write(f"✓ Thinning: {'Enabled' if use_thinning else 'Disabled'}")
                 st.sidebar.write(f"✓ Smoothing: {'Enabled' if use_smoothing else 'Disabled'}")
+                
+                if compute_chamfer or compute_trimmed_hausdorff or compute_modified_hausdorff:
+                    st.sidebar.markdown("---")
+                    st.sidebar.subheader("Active Metrics")
+                    if compute_chamfer:
+                        st.sidebar.write("✓ Chamfer Distance")
+                    if compute_trimmed_hausdorff:
+                        st.sidebar.write("✓ Trimmed Hausdorff")
+                    if compute_modified_hausdorff:
+                        st.sidebar.write("✓ Modified Hausdorff")
                 
             except Exception as e:
                 st.error(f"Error processing image: {str(e)}")
