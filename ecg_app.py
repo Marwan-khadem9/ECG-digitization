@@ -18,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-def process_ecg_image(uploaded_image, use_dilation, use_thinning):
+def process_ecg_image(uploaded_image, threshold_value, use_dilation, use_thinning):
     """Process the uploaded ECG image and extract lead data"""
     
     # Step 1: Convert PIL image to grayscale
@@ -26,7 +26,7 @@ def process_ecg_image(uploaded_image, use_dilation, use_thinning):
     image_np = np.array(image)
     
     # Step 2: Apply binarization
-    _, binary_image = cv2.threshold(image_np, 50, 255, cv2.THRESH_BINARY)
+    _, binary_image = cv2.threshold(image_np, threshold_value, 255, cv2.THRESH_BINARY)
     
     # Step 3: Signal enhancement
     # Median filtering to remove noise
@@ -420,7 +420,7 @@ def main():
         with st.spinner("Processing ECG image..."):
             try:
                 # Process image with user settings
-                original_gray, binary_img, processed_img = process_ecg_image(image, use_dilation, use_thinning)
+                original_gray, binary_img, processed_img = process_ecg_image(image, threshold_value, use_dilation, use_thinning)
                 
                 # Detect baselines
                 segments, baselines = detect_baselines(processed_img)
