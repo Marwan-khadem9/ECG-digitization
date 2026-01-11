@@ -162,7 +162,7 @@ def smooth_leads(digitized_leads, use_smoothing):
     return smoothed_leads
 
 def create_plots(smoothed_leads):
-    """Create plots for the three ECG leads"""
+    """Create plots for the three ECG leads that fit on screen"""
     
     # Determine global y-limit range
     all_y = []
@@ -177,19 +177,20 @@ def create_plots(smoothed_leads):
     else:
         ymin, ymax = -1, 1
     
-    # Create plots
-    fig, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+    # Create more compact plots with reduced figure height
+    fig, axes = plt.subplots(3, 1, figsize=(12, 6), sharex=True)
     lead_names = ['Lead I', 'Lead II', 'Lead III']
     
     for i, (x, y) in enumerate(smoothed_leads):
         y = np.array(y)
         axes[i].plot(x/200, y/80, color='blue', linewidth=1.5)
-        axes[i].set_title(lead_names[i], fontsize=14, fontweight='bold')
-        axes[i].set_ylabel("Amplitude (mV)", fontsize=12)
+        axes[i].set_title(lead_names[i], fontsize=12, fontweight='bold')
+        axes[i].set_ylabel("Amplitude (mV)", fontsize=10)
         axes[i].set_ylim([ymin, ymax])
         axes[i].grid(True, alpha=0.3)
+        axes[i].tick_params(labelsize=9)
     
-    axes[-1].set_xlabel("Time (seconds)", fontsize=12)
+    axes[-1].set_xlabel("Time (seconds)", fontsize=10)
     plt.tight_layout()
     
     return fig
@@ -505,7 +506,7 @@ def main():
                 with col7:
                     if smoothed_leads:
                         duration = len(smoothed_leads[0][0])
-                        st.metric("Signal Duration (pixels)", duration)
+                        st.metric("Signal Duration (samples)", duration)
                 
                 # Display quality metrics if computed
                 if quality_results is not None:
