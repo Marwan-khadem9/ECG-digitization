@@ -18,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-def process_ecg_image(uploaded_image, threshold_value, use_dilation, use_thinning):
+def process_ecg_image(uploaded_image, threshold_value, use_dilation_thinning):
     """Process the uploaded ECG image and extract lead data"""
     
     # Step 1: Convert PIL image to grayscale
@@ -29,28 +29,24 @@ def process_ecg_image(uploaded_image, threshold_value, use_dilation, use_thinnin
     _, binary_image = cv2.threshold(image_np, threshold_value, 255, cv2.THRESH_BINARY)
     
     # Step 3: Signal enhancement
-    # Median filtering to remove noise
-    denoised = median_filter(binary_image, size=3)
-    
-    # Invert image for morphological operations
-    inverted = cv2.bitwise_not(denoised)
-    
     # Conditional dilation
-    if use_dilation:
+    if use_dilation_thinning:
+        # Median filtering to remove noise
+        denoised = median_filter(binary_image, size=3)
+        
+        # Invert image for morphological operations
+        inverted = cv2.bitwise_not(denoised)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         dilated = cv2.dilate(inverted, kernel, iterations=1)
-    else:
-        dilated = inverted
-    
-    # Conditional thinning
-    if use_thinning:
+        
         binary_mask = (dilated // 255).astype(np.uint8)
         thinned = thin(binary_mask).astype(np.uint8) * 255
         processed_image = cv2.bitwise_not(thinned)
     else:
-        processed_image = cv2.bitwise_not(dilated)
-    
+        processed_image = binary_image
+
     return image_np, binary_image, processed_image
+
 
 def detect_baselines(processed_image):
     """Detect baseline positions for the three ECG leads"""
@@ -389,8 +385,7 @@ def main():
     threshold_value = st.sidebar.slider("Binary Threshold", 1, 255, 50, help="Adjust this if the ECG signal is not properly detected")
     
     st.sidebar.header("Processing Options")
-    use_dilation = st.sidebar.checkbox("Include Dilation", value=True, help="Apply dilation to bridge gaps in the ECG signal")
-    use_thinning = st.sidebar.checkbox("Include Thinning", value=True, help="Apply morphological thinning to refine signal lines")
+    use_dilation_thinning = st.sidebar.checkbox("Include Dilation and Thinning", value=True, help="Apply dilation to bridge gaps in the ECG signal and morphological thinning to refine signal lines")
     use_smoothing = st.sidebar.checkbox("Include Savitzky-Golay Filter", value=True, help="Apply post-processing smoothing filter to the digitized signal")
     
     st.sidebar.header("Quality Metrics")
@@ -420,7 +415,7 @@ def main():
         with st.spinner("Processing ECG image..."):
             try:
                 # Process image with user settings
-                original_gray, binary_img, processed_img = process_ecg_image(image, threshold_value, use_dilation, use_thinning)
+                original_gray, binary_img, processed_img = process_ecg_image(image, threshold_value, use_dilation_thinning)
                 
                 # Detect baselines
                 segments, baselines = detect_baselines(processed_img)
@@ -539,8 +534,7 @@ def main():
                 # Show active processing options
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Active Settings")
-                st.sidebar.write(f"✓ Dilation: {'Enabled' if use_dilation else 'Disabled'}")
-                st.sidebar.write(f"✓ Thinning: {'Enabled' if use_thinning else 'Disabled'}")
+                st.sidebar.write(f"✓ Dilation and Thinning: {'Enabled' if use_dilation_thinning else 'Disabled'}")
                 st.sidebar.write(f"✓ Smoothing: {'Enabled' if use_smoothing else 'Disabled'}")
                 
                 if compute_chamfer or compute_trimmed_hausdorff or compute_modified_hausdorff:
