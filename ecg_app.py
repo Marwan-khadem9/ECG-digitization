@@ -11,6 +11,7 @@ from scipy.ndimage import distance_transform_edt
 import io
 import base64
 import pandas as pd
+import requests
 
 # Set page config
 st.set_page_config(
@@ -389,32 +390,32 @@ def show_example_images():
     st.markdown("Download these example images to test the app:")
     
     # GitHub raw URLs for example images
-    base_url = "https://github.com/Marwan-khadem9/ECG-digitization/tree/main/example_ecgs"
+    base_url = "https://raw.githubusercontent.com/Marwan-khadem9/ECG-digitization/main/example_ecgs/"
     
     # Create example descriptions
     examples = [
         {
             "name": "Example 1: Standard ECG",
             "description": "3-lead ECG with normal sinus rhythm, clear baseline",
-            "url": base_url + "/example1.jpg",
+            "url": base_url + "example1.jpg",
             "threshold": "45-55"
         },
         {
             "name": "Example 2: Regular Rhythm",
             "description": "4-beat rhythm strip with prominent R waves",
-            "url": base_url + "/example2.jpg",
+            "url": base_url + "example2.jpg",
             "threshold": "40-50"
         },
         {
             "name": "Example 3: Variable Baseline",
             "description": "ECG with baseline drift in third lead",
-            "url": base_url + "/example3.jpg",
+            "url": base_url + "example3.jpg",
             "threshold": "45-60"
         },
         {
             "name": "Example 4: Bradycardia",
             "description": "Slower heart rate, 2 beats per lead",
-            "url": base_url + "/example4.jpg",
+            "url": base_url + "example4.jpg",
             "threshold": "40-55"
         }
     ]
@@ -429,26 +430,28 @@ def show_example_images():
                 st.markdown(f"*{examples[idx]['description']}*")
                 
                 try:
-                    # Display the image from GitHub
-                    st.image(examples[idx]["url"], 
-                             caption=f"Example ECG {idx+1}", 
-                             use_container_width=True)
-                    
-                    st.markdown("**Download Instructions:**")
-                    st.markdown("1. Right-click on the image above")
-                    st.markdown("2. Select 'Save image as...'")
-                    st.markdown("3. Upload it using the file uploader above")
-                    
-                    st.info(f"💡 Recommended threshold: {examples[idx]['threshold']}")
-                    
-                    # Direct download link
-                    st.markdown(f"[⬇️ Direct Download Link]({examples[idx]['url']})")
+                    # Fetch the image from GitHub
+                    response = requests.get(examples[idx]["url"], timeout=10)
+                    if response.status_code == 200:
+                        # Load image from response
+                        img = Image.open(io.BytesIO(response.content))
+                        st.image(img, caption=f"Example ECG {idx+1}", use_container_width=True)
+                        
+                        st.markdown("**Download Instructions:**")
+                        st.markdown("1. Right-click on the image above")
+                        st.markdown("2. Select 'Save image as...'")
+                        st.markdown("3. Upload it using the file uploader above")
+                        
+                        st.info(f"💡 Recommended threshold: {examples[idx]['threshold']}")
+                        
+                        # Direct download link
+                        st.markdown(f"[⬇️ Direct Download Link]({examples[idx]['url']})")
+                    else:
+                        st.warning(f"Could not load image. [Download directly]({examples[idx]['url']})")
                     
                 except Exception as e:
                     st.warning(f"Could not load example image. [Download directly]({examples[idx]['url']})")
-                
-
-
+                    
 # Main Streamlit App
 def main():
     st.title("ECG Digitization Web App")
