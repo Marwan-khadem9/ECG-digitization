@@ -378,7 +378,7 @@ def compute_quality_metrics(image_np, dat_content, compute_chamfer, compute_trim
 def get_example_image_download_link(image_data, filename):
     """Create a download link for example images"""
     buffered = io.BytesIO()
-    image_data.save(buffered, format="PNG")
+    image_data.save(buffered, format="JPG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
     href = f'<a href="data:image/png;base64,{img_str}" download="{filename}">⬇️ Download</a>'
     return href
@@ -389,33 +389,32 @@ def show_example_images():
     st.markdown("Download these example images to test the app:")
     
     # GitHub raw URLs for example images
-    # Replace YOUR_USERNAME and YOUR_REPO with your actual GitHub details
-    base_url = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/example_ecgs/"
+    base_url = "https://github.com/Marwan-khadem9/ECG-digitization/tree/main/example_ecgs"
     
     # Create example descriptions
     examples = [
         {
             "name": "Example 1: Standard ECG",
             "description": "3-lead ECG with normal sinus rhythm, clear baseline",
-            "url": base_url + "example1.png",
+            "url": base_url + "example1.jpg",
             "threshold": "45-55"
         },
         {
             "name": "Example 2: Regular Rhythm",
             "description": "4-beat rhythm strip with prominent R waves",
-            "url": base_url + "example2.png",
+            "url": base_url + "example2.jpg",
             "threshold": "40-50"
         },
         {
             "name": "Example 3: Variable Baseline",
             "description": "ECG with baseline drift in third lead",
-            "url": base_url + "example3.png",
+            "url": base_url + "example3.jpg",
             "threshold": "45-60"
         },
         {
             "name": "Example 4: Bradycardia",
             "description": "Slower heart rate, 2 beats per lead",
-            "url": base_url + "example4.png",
+            "url": base_url + "example4.jpg",
             "threshold": "40-55"
         }
     ]
