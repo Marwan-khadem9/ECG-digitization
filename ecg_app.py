@@ -375,10 +375,94 @@ def compute_quality_metrics(image_np, dat_content, compute_chamfer, compute_trim
     
     return results
 
+def get_example_image_download_link(image_data, filename):
+    """Create a download link for example images"""
+    buffered = io.BytesIO()
+    image_data.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    href = f'<a href="data:image/png;base64,{img_str}" download="{filename}">⬇️ Download</a>'
+    return href
+
+def show_example_images():
+    """Display example ECG images that users can download and test"""
+    st.subheader("📋 Example ECG Images")
+    st.markdown("Download these example images to test the app:")
+    
+    # GitHub raw URLs for example images
+    # Replace YOUR_USERNAME and YOUR_REPO with your actual GitHub details
+    base_url = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/example_ecgs/"
+    
+    # Create example descriptions
+    examples = [
+        {
+            "name": "Example 1: Standard ECG",
+            "description": "3-lead ECG with normal sinus rhythm, clear baseline",
+            "url": base_url + "example1.png",
+            "threshold": "45-55"
+        },
+        {
+            "name": "Example 2: Regular Rhythm",
+            "description": "4-beat rhythm strip with prominent R waves",
+            "url": base_url + "example2.png",
+            "threshold": "40-50"
+        },
+        {
+            "name": "Example 3: Variable Baseline",
+            "description": "ECG with baseline drift in third lead",
+            "url": base_url + "example3.png",
+            "threshold": "45-60"
+        },
+        {
+            "name": "Example 4: Bradycardia",
+            "description": "Slower heart rate, 2 beats per lead",
+            "url": base_url + "example4.png",
+            "threshold": "40-55"
+        }
+    ]
+    
+    cols = st.columns(2)
+    
+    for idx in range(4):
+        col = cols[idx % 2]
+        
+        with col:
+            with st.expander(examples[idx]["name"], expanded=False):
+                st.markdown(f"*{examples[idx]['description']}*")
+                
+                try:
+                    # Display the image from GitHub
+                    st.image(examples[idx]["url"], 
+                             caption=f"Example ECG {idx+1}", 
+                             use_container_width=True)
+                    
+                    st.markdown("**Download Instructions:**")
+                    st.markdown("1. Right-click on the image above")
+                    st.markdown("2. Select 'Save image as...'")
+                    st.markdown("3. Upload it using the file uploader above")
+                    
+                    st.info(f"💡 Recommended threshold: {examples[idx]['threshold']}")
+                    
+                    # Direct download link
+                    st.markdown(f"[⬇️ Direct Download Link]({examples[idx]['url']})")
+                    
+                except Exception as e:
+                    st.warning(f"Could not load example image. [Download directly]({examples[idx]['url']})")
+                
+
+
 # Main Streamlit App
 def main():
     st.title("ECG Digitization Web App")
     st.markdown("Upload an ECG image to digitize and extract lead data with automatic processing")
+    
+    # Show example images section
+    with st.expander("📸 View Example ECG Images", expanded=False):
+        st.markdown("""
+        **Don't have an ECG image?** Try these examples to see how the app works!
+        
+        These sample images demonstrate different ECG patterns and are ideal for testing the digitization process.
+        """)
+        show_example_images()
     
     # Sidebar for parameters
     st.sidebar.header("Processing Parameters")
@@ -553,7 +637,7 @@ def main():
     
     else:
         # Instructions when no file is uploaded
-        st.info("^ Please upload an ECG image to begin digitization")
+        st.info("👆 Please upload an ECG image to begin digitization, or check out the example images above")
         
         with st.expander("ℹ️ How to use this app"):
             st.markdown("""
@@ -571,6 +655,7 @@ def main():
             - Ensure the ECG traces are clearly visible against the background
             - The image should contain exactly 3 ECG leads arranged vertically
             - Experiment with processing options to optimize results for your specific ECG image
+            - Try the example images above if you don't have your own ECG image
             """)
 
 if __name__ == "__main__":
