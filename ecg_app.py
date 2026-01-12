@@ -396,25 +396,25 @@ def show_example_images():
         {
             "name": "Example 1: Standard ECG",
             "description": "3-lead ECG with normal sinus rhythm, clear baseline",
-            "url": base_url + "example1.jpg",
+            "url": base_url + "/example1.jpg",
             "threshold": "45-55"
         },
         {
             "name": "Example 2: Regular Rhythm",
             "description": "4-beat rhythm strip with prominent R waves",
-            "url": base_url + "example2.jpg",
+            "url": base_url + "/example2.jpg",
             "threshold": "40-50"
         },
         {
             "name": "Example 3: Variable Baseline",
             "description": "ECG with baseline drift in third lead",
-            "url": base_url + "example3.jpg",
+            "url": base_url + "/example3.jpg",
             "threshold": "45-60"
         },
         {
             "name": "Example 4: Bradycardia",
             "description": "Slower heart rate, 2 beats per lead",
-            "url": base_url + "example4.jpg",
+            "url": base_url + "/example4.jpg",
             "threshold": "40-55"
         }
     ]
